@@ -34,4 +34,8 @@ public class ARDebugView: UIView {
         textView.text = text
     }
     
+    public func clearWithLog(_ logText: String){
+        textView.text = logText
+    }
+    
 }

@@ -4,12 +4,13 @@
  */
 import UIKit
 import ARKit
+import Vision
 import PlaygroundSupport
 
 /**
  * A Simple starting point for AR experimentation in Swift Playgrounds 2
  */
-class ARFun: NSObject, ARSCNViewDelegate {
+class ARFun: NSObject, ARSCNViewDelegate, ARSessionDelegate {
     var nodeDict = [UUID:SCNNode]()
     //mark: ARSCNViewDelegate
     func renderer(_ renderer: SCNSceneRenderer, nodeFor anchor: ARAnchor) -> SCNNode? {
@@ -25,9 +26,55 @@ class ARFun: NSObject, ARSCNViewDelegate {
         }
     }
     
+    //=======================
+    //mark: ARSessionDelegate
+    ///holds the image we're trying to match
+    var matchImage: CVPixelBuffer?
+    var captureNext = false
+    func session(_ session: ARSession, didUpdate frame: ARFrame){
+        if captureNext {
+            matchImage = frame.capturedImage
+            captureNext = false
+        } else if let referenceImage = matchImage {
+            let imageRequest = VNTranslationalImageRegistrationRequest(targetedCVPixelBuffer: referenceImage)
+            let requestHandler = VNImageRequestHandler(cvPixelBuffer: frame.capturedImage)
+            try? requestHandler.perform([imageRequest])
+            if let results = imageRequest.results?.first as? VNImageTranslationAlignmentObservation {
+                let originalRect = CGRect(x: 0, y:0, width: 1, height: 1)
+                guard let viewSize = view?.bounds.size else {
+                    return
+                }
+                let displayTransform = frame.displayTransform(for: UIInterfaceOrientation.landscapeLeft, viewportSize: viewSize) //TODO: programatically get orientation
+                let ndRect = originalRect.applying(displayTransform)
+                let displayRect = CGRect(x:ndRect.origin.x * viewSize.width, y: ndRect.origin.y * viewSize.height, width: ndRect.size.width * viewSize.width, height: ndRect.size.height * viewSize.height) //perhaps another transform instead of this mess
+                DispatchQueue.main.async{
+                    
+                    if results.confidence < 1 {
+                        self.debugView.clearWithLog("LOW")
+                    } else if fabs(results.alignmentTransform.ty) >= CGFloat(CVPixelBufferGetWidth(frame.capturedImage)){
+                        self.debugView.clearWithLog("NO MATCH: too much Y")
+                    } else if results.alignmentTransform.ty <= 0 {
+                        self.debugView.clearWithLog("NO MATCH: too little Y")
+                    } else if results.alignmentTransform.tx >= CGFloat(CVPixelBufferGetHeight(frame.capturedImage)) {
+                        self.debugView.clearWithLog("NO MATCH: too much X")
+                    }  else if results.alignmentTransform.tx <= 0 {
+                        self.debugView.clearWithLog("NO MATCH: too little X")
+                    } else {
+                        self.debugView.clearWithLog("match: \(results.alignmentTransform)")
+                        self.rectView.frame = displayRect
+                        self.debugView.log("rect is: \(String(describing: self.view?.bounds.size))")
+                        self.debugView.log("transform is: \(displayTransform)")
+                    }
+                }
+            }
+        }
+    }
+    
     let arSessionConfig = ARWorldTrackingConfiguration()
     
     let debugView = ARDebugView()
+    let captureButton = UIButton(type: UIButtonType.system)
+    let rectView = UIView()
     
     var view:ARSCNView? = nil
     let scene = SCNScene()
@@ -39,18 +86,34 @@ class ARFun: NSObject, ARSCNViewDelegate {
         let arView = ARSCNView(frame: frame)
         //configure the ARSCNView
         arView.debugOptions = [
-            //ARSCNDebugOptions.showWorldOrigin,
+            ARSCNDebugOptions.showWorldOrigin,
             ARSCNDebugOptions.showFeaturePoints, 
 //              SCNDebugOptions.showLightInfluences, 
 //              SCNDebugOptions.showWireframe
         ]
         arView.showsStatistics = true
         arView.automaticallyUpdatesLighting = true
+        
+        //views
         debugView.translatesAutoresizingMaskIntoConstraints = false
         //add the debug view 
         arView.addSubview(debugView)
-        arView.leadingAnchor.constraint(equalTo: debugView.leadingAnchor)
+        arView.leadingAnchor.constraint(equalTo: debugView.leadingAnchor).isActive = true
         arView.topAnchor.constraint(equalTo: debugView.topAnchor)
+        //configure the capture button
+        captureButton.setTitle("Capture", for: .normal)
+        captureButton.backgroundColor = UIColor.gray
+        captureButton.translatesAutoresizingMaskIntoConstraints = false
+        arView.addSubview(captureButton)
+        arView.topAnchor.constraint(equalTo: captureButton.topAnchor).isActive = true
+        arView.trailingAnchor.constraint(equalTo: captureButton.trailingAnchor).isActive = true
+        captureButton.addTarget(self, action: #selector(captureButtonTapped), for: .touchUpInside )
+        //configure the rectView
+        arView.addSubview(rectView)
+        rectView.layer.borderWidth = 2
+        rectView.layer.borderColor = UIColor.red.cgColor
+        rectView.frame = CGRect(x: 0, y:100, width:30, height: 30)
+        
         
         view = arView
         arView.scene = scene
@@ -60,11 +123,16 @@ class ARFun: NSObject, ARSCNViewDelegate {
         arSessionConfig.planeDetection = .horizontal
         arSessionConfig.worldAlignment = .gravityAndHeading //y-axis points UP, x points E (longitude), z points S (latitude)
         arSessionConfig.isLightEstimationEnabled = true
+        arView.session.delegate = self
         arView.session.run(arSessionConfig, options: [.resetTracking, .removeExistingAnchors])
         arView.delegate = self
         
         let gestureRecognizer = UITapGestureRecognizer(target: self, action: #selector(viewTapped(gestureRecognizer:)))
         view?.addGestureRecognizer(gestureRecognizer)
+    }
+    
+    @objc func captureButtonTapped() {
+        captureNext = true
     }
     
     let shouldAddAnchorsForNodes = true
@@ -100,6 +168,8 @@ class ARFun: NSObject, ARSCNViewDelegate {
             debugView.log("no scene \(fileName) in \(directoryName)")
             return nil
         }
+        
+        //debug(scene: theScene)
         
         let node = SCNNode()
         
@@ -143,6 +213,7 @@ class ARFun: NSObject, ARSCNViewDelegate {
         transform.columns.3.y = 0.2
         node.simdTransform = transform
         node.light = light
+//          node.position = SCNVector3(0.0, 0.2, 0.0)
         node.simdTransform = transform
         return node
     }
@@ -152,32 +223,28 @@ class ARFun: NSObject, ARSCNViewDelegate {
             return
         }
         
-        //candleNode.addChildNode(makeLightNode())
+        candleNode.addChildNode(makeLightNode())
         
         addNode(node: candleNode, worldTransform: worldTransform)
     }
     
-    func addTrex(worldTransform: matrix_float4x4 = matrix_identity_float4x4) {
-        debugView.log("addTrex")
-        guard let node = nodeFromScene(named: "Tyrannosaurus_jmpk2.scn", inDirectory: "/") else {
-            return
-        }
-        addNode(node: node, worldTransform: worldTransform)
-    }
-    
     ///add a node where the scene was tapped
     @objc func viewTapped(gestureRecognizer: UITapGestureRecognizer){
-        print("got tap: \(gestureRecognizer.location(in: view))")
-        let hitTypes:ARHitTestResult.ResultType = [
-            ARHitTestResult.ResultType.existingPlaneUsingExtent,
-            //ARHitTestResult.ResultType.estimatedHorizontalPlane,
-            //ARHitTestResult.ResultType.featurePoint
-        ]
-        if let hitTransform = view?.hitTest(gestureRecognizer.location(in: view), types: hitTypes).first?.worldTransform {
-            addTrex(worldTransform: hitTransform)
-            //addCandle(worldTransform: hitTransform) //TODO: use the anchor provided, if any?
-        } else {
-            debugView.log("no hit for tap")
+        switch gestureRecognizer.state {
+        default:
+            print("got tap: \(gestureRecognizer.location(in: view))")
+            let hitTypes:ARHitTestResult.ResultType = [
+                ARHitTestResult.ResultType.existingPlaneUsingExtent,
+//                  ARHitTestResult.ResultType.estimatedHorizontalPlane,
+//                  ARHitTestResult.ResultType.featurePoint
+            ]
+            if let hitTransform = view?.hitTest(gestureRecognizer.location(in: view), types: hitTypes).first?.worldTransform {
+                addCandle(worldTransform: hitTransform) //TODO: use the anchor provided, if any?
+            } else {
+                //add an item at 0,0,0 -- 
+                //addCandle()
+                debugView.log("no hit for tap")
+            }
         }
     }
     

@@ -106,7 +106,7 @@ class WayPointDisplay: NSObject, ARSCNViewDelegate {
         }
     }
     
-    let arSessionConfig = ARWorldTrackingSessionConfiguration()
+    let arSessionConfig = ARWorldTrackingConfiguration()
     let debugView = ARDebugView()
     var view:ARSCNView? = nil
     let scene = SCNScene()
@@ -135,7 +135,7 @@ class WayPointDisplay: NSObject, ARSCNViewDelegate {
         arView.scene = scene
         
         //setup session config
-        if !ARWorldTrackingSessionConfiguration.isSupported { return }
+        if !ARWorldTrackingConfiguration.isSupported { return }
         arSessionConfig.planeDetection = .horizontal
         arSessionConfig.worldAlignment = .gravityAndHeading //y-axis points UP, x points E (longitude), z points S (latitude)
         arSessionConfig.isLightEstimationEnabled = true
@@ -148,7 +148,7 @@ class WayPointDisplay: NSObject, ARSCNViewDelegate {
     
     let shouldAddAnchorsForNodes = true
     func addNode(node: SCNNode, worldTransform: matrix_float4x4) {
-        var anchor = ARAnchor(transform: worldTransform)
+        let anchor = ARAnchor(transform: worldTransform)
         let position = vectorFrom(transform: worldTransform)
         node.position = position
         node.rotation = SCNVector4(x: 1, y: 1, z: 0, w: 0)
@@ -165,7 +165,7 @@ class WayPointDisplay: NSObject, ARSCNViewDelegate {
         let height = 200 as Float
         let cylinder = SCNCylinder(radius: 0.5, height: CGFloat(height))
         
-        cylinder.firstMaterial?.diffuse.contents = UIColor(colorLiteralRed: 0.4, green: 0, blue: 0, alpha: 1)
+        cylinder.firstMaterial?.diffuse.contents = UIColor(red: 0.4, green: 0, blue: 0, alpha: 1)
         cylinder.firstMaterial?.specular.contents = UIColor.white
         
         //raise the cylinder so the base is positioned at the worldTransform
